@@ -60,7 +60,7 @@ public class AI_Chat : MonoBehaviour
     private void Start()
     {
         sendbt.onClick.AddListener(() => SendChat(chat.text));
-        StartCoroutine(UpdateWeatherInfo());
+        StartCoroutine(UpdateWeatherInfo()); // 保留預查天氣資訊
     }
 
     public void SendChat(string userMessage)
@@ -113,7 +113,7 @@ public class AI_Chat : MonoBehaviour
         }
 
         string finalReply = GenerateTriggerReply(userMessage, chatResponse);
-        ansArea.text = finalReply + "\n" + weatherInfo;
+        ansArea.text = finalReply;
 
         WriteLogToFile(userMessage, finalReply);
     }
@@ -128,7 +128,8 @@ public class AI_Chat : MonoBehaviour
             reply += "\n對了，別忘了吃飯和吃藥喔～";
         else if (user.Contains("運動") || user.Contains("散步"))
             reply += "\n你的步數也會上排行榜，我會幫你記得！";
-
+        else if (user.Contains("天氣") || user.Contains("氣溫"))
+            reply += "\n目前天氣：" + weatherInfo;
         return reply;
     }
 
@@ -147,7 +148,7 @@ public class AI_Chat : MonoBehaviour
         yield return weatherRequest.SendWebRequest();
 
         if (weatherRequest.result == UnityWebRequest.Result.Success)
-            weatherInfo = "目前天氣：" + weatherRequest.downloadHandler.text;
+            weatherInfo = weatherRequest.downloadHandler.text;
         else
             weatherInfo = "（天氣資料目前無法取得）";
     }
