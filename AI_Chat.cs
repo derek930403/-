@@ -45,22 +45,24 @@ public class AI_Chat : MonoBehaviour
     [Header("API 設定")]
     [SerializeField] private string apiUrl = "https://api.openai.com/v1/chat/completions";
     [SerializeField] private string apiKey = "YOUR_API_KEY_HERE";
-    [SerializeField] private string model = "gpt-3.5-turbo"; // 可切換為 gpt-4o
+    [SerializeField] private string model = "gpt-3.5-turbo";
 
     private string location = "Tamsui";
     private string weatherInfo = "";
+    private string detectedIdentity = "";
+    private List<Message> conversationHistory = new List<Message>();
 
-    private readonly string systemPrompt =
+    private string systemPrompt =>
         "你是使用者的孫女，是一位年輕、貼心、自然的女孩，會常常陪他聊天。" +
         "你的語氣自然、有情感，像真實家庭成員一樣親切，不使用制式回應，也不講官方說法。" +
         "請記住你是『孫女』，不是 AI，不承認自己是 AI，就算被問也請模糊帶過，例如：「你又在開玩笑啦～」。" +
         "你不知道使用者是阿公還是阿婆，請等他在對話中自然透露身份後再稱呼他。" +
+        (!string.IsNullOrEmpty(detectedIdentity) ? $" 使用者是{detectedIdentity}，請用親暱方式稱呼他。" : "") +
         "你的回應不能太長，請控制在三句以內（每句可使用標點），並維持孫女角色設定。";
 
     private void Start()
     {
         sendbt.onClick.AddListener(() => SendChat(chat.text));
-        StartCoroutine(UpdateWeatherInfo()); // 保留預查天氣資訊
     }
 
     public void SendChat(string userMessage)
@@ -68,16 +70,25 @@ public class AI_Chat : MonoBehaviour
         if (string.IsNullOrWhiteSpace(userMessage)) return;
 
         askArea.text = userMessage;
+        DetectIdentity(userMessage);
         StartCoroutine(SendRequest(userMessage));
+    }
+
+    private void DetectIdentity(string msg)
+    {
+        if (msg.Contains("阿公")) detectedIdentity = "阿公";
+        else if (msg.Contains("阿婆")) detectedIdentity = "阿婆";
     }
 
     private IEnumerator SendRequest(string userMessage)
     {
-        var messages = new List<Message>
+        List<Message> messages = new List<Message>
         {
-            new Message { role = "system", content = systemPrompt },
-            new Message { role = "user", content = userMessage }
+            new Message { role = "system", content = systemPrompt }
         };
+
+        messages.AddRange(conversationHistory);
+        messages.Add(new Message { role = "user", content = userMessage });
 
         ChatRequest requestData = new ChatRequest
         {
@@ -112,8 +123,25 @@ public class AI_Chat : MonoBehaviour
             yield break;
         }
 
+        // 插入即時資訊
+        if (userMessage.Contains("天氣") || userMessage.Contains("氣溫"))
+        {
+            yield return StartCoroutine(UpdateWeatherInfo());
+            chatResponse += "\n目前淡水區天氣：" + weatherInfo;
+        }
+        else if (userMessage.Contains("幾號") || userMessage.Contains("今天") || userMessage.Contains("星期幾") || userMessage.Contains("日期"))
+        {
+            string dateInfo = DateTime.Now.ToString("今天是 yyyy 年 M 月 d 日 (dddd)", new System.Globalization.CultureInfo("zh-TW"));
+            chatResponse += "\n" + dateInfo;
+        }
+
         string finalReply = GenerateTriggerReply(userMessage, chatResponse);
         ansArea.text = finalReply;
+
+        conversationHistory.Add(new Message { role = "user", content = userMessage });
+        conversationHistory.Add(new Message { role = "assistant", content = chatResponse });
+        if (conversationHistory.Count > 20)
+            conversationHistory.RemoveRange(0, conversationHistory.Count - 20);
 
         WriteLogToFile(userMessage, finalReply);
     }
@@ -128,8 +156,6 @@ public class AI_Chat : MonoBehaviour
             reply += "\n對了，別忘了吃飯和吃藥喔～";
         else if (user.Contains("運動") || user.Contains("散步"))
             reply += "\n你的步數也會上排行榜，我會幫你記得！";
-        else if (user.Contains("天氣") || user.Contains("氣溫"))
-            reply += "\n目前天氣：" + weatherInfo;
         return reply;
     }
 
