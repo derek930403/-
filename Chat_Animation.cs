@@ -1,51 +1,52 @@
 ﻿using System.Collections;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
-using TMPro;
 
 public class Chat_Animation : MonoBehaviour
 {
-    [Header("UI 元件")]
-    [SerializeField] private Button chat_btn;
-    [SerializeField] private TMP_InputField chatInputField;
-    [SerializeField] private Animator ani;
-    [SerializeField] private AI_Chat aiChat;
+    public TMP_InputField inputField;
+    public Button sendButton;
+    public GameObject chatBox;
+    public Animator animator;
+    public GameObject bubble;
+    public GameObject chatTextArea;
 
-    [Header("動畫設定")]
-    public string triggerName = "Play";
-    private bool hasPlayed = false;
+    private bool isTyping = false;
+    private string latestText = "";
 
     private void Start()
     {
-        if (chat_btn != null)
-            chat_btn.onClick.AddListener(send);
+        sendButton.onClick.AddListener(send);
     }
 
     public void send()
     {
+        if (string.IsNullOrWhiteSpace(inputField.text)) return;
+
+        latestText = inputField.text;
         Debug.Log("press!");
+        chatBox.SetActive(true);
+        StartCoroutine(AnimateText(latestText));
+        inputField.text = "";
+    }
 
-        string userMessage = chatInputField?.text.Trim();
-        if (string.IsNullOrEmpty(userMessage)) return;
+    IEnumerator AnimateText(string content)
+    {
+        isTyping = true;
+        bubble.SetActive(true);
+        animator.Play("Typing");
 
-        // 呼叫 AI 對話
-        if (aiChat != null)
+        TMP_Text displayText = chatTextArea.GetComponent<TMP_Text>();
+        displayText.text = "";
+
+        foreach (char letter in content.ToCharArray())
         {
-            aiChat.SendChat(userMessage);
+            displayText.text += letter;
+            yield return new WaitForSeconds(0.03f);
         }
 
-        // 播放動畫（僅一次）
-        if (!hasPlayed && ani != null)
-        {
-            Debug.Log("act!!");
-            ani.SetTrigger(triggerName);
-            hasPlayed = true;
-        }
-
-        // 清空輸入欄位
-        if (chatInputField != null)
-        {
-            chatInputField.text = "";
-        }
+        animator.Play("Idle");
+        isTyping = false;
     }
 }
