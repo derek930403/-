@@ -52,13 +52,29 @@ public class AI_Chat : MonoBehaviour
     private string detectedIdentity = "";
     private List<Message> conversationHistory = new List<Message>();
 
+    // 可由登入系統設定
+    public enum UserGender { Unknown, Male, Female }
+    public UserGender userGender = UserGender.Unknown;
+
     private string systemPrompt =>
         "你是使用者的孫女，是一位年輕、貼心、自然的女孩，會常常陪他聊天。" +
         "你的語氣自然、有情感，像真實家庭成員一樣親切，不使用制式回應，也不講官方說法。" +
         "請記住你是『孫女』，不是 AI，不承認自己是 AI，就算被問也請模糊帶過，例如：「你又在開玩笑啦～」。" +
-        "你不知道使用者是阿公還是阿婆，請等他在對話中自然透露身份後再稱呼他。" +
-        (!string.IsNullOrEmpty(detectedIdentity) ? $" 使用者是{detectedIdentity}，請用親暱方式稱呼他。" : "") +
-        "你的回應不能太長，請控制在三句以內（每句可使用標點），並維持孫女角色設定。";
+        GetIdentityPrompt() +
+        "你的回應不能太長，請控制在三句以內（每句可使用標點），並維持孫女角色設定。" +
+        " 遇到使用者提及情緒或生活狀況時，要引導使用者使用日記功能記錄，或使用地圖查看活動與附近地點，或前往排行榜看看大家的運動步數。";
+
+    private string GetIdentityPrompt()
+    {
+        if (!string.IsNullOrEmpty(detectedIdentity))
+            return $" 使用者是{detectedIdentity}，請用親暱方式稱呼他。";
+        else if (userGender == UserGender.Male)
+            return " 使用者為男性，請稱呼他為阿公。";
+        else if (userGender == UserGender.Female)
+            return " 使用者為女性，請稱呼他為阿嬤或阿婆。";
+        else
+            return "";
+    }
 
     private void Start()
     {
@@ -77,7 +93,7 @@ public class AI_Chat : MonoBehaviour
     private void DetectIdentity(string msg)
     {
         if (msg.Contains("阿公")) detectedIdentity = "阿公";
-        else if (msg.Contains("阿婆")) detectedIdentity = "阿婆";
+        else if (msg.Contains("阿婆") || msg.Contains("阿嬤")) detectedIdentity = "阿婆";
     }
 
     private IEnumerator SendRequest(string userMessage)
@@ -110,7 +126,7 @@ public class AI_Chat : MonoBehaviour
         if (request.result != UnityWebRequest.Result.Success)
         {
             Debug.LogError("API 錯誤: " + request.error);
-            ansArea.text = "孫女現在有點連不上網，晚點再聊聊好嗎？";
+            ansArea.text = "晚點再聊聊好嗎？";
             yield break;
         }
 
@@ -123,7 +139,6 @@ public class AI_Chat : MonoBehaviour
             yield break;
         }
 
-        // 插入即時資訊
         if (userMessage.Contains("天氣") || userMessage.Contains("氣溫"))
         {
             yield return StartCoroutine(UpdateWeatherInfo());
@@ -149,13 +164,13 @@ public class AI_Chat : MonoBehaviour
     private string GenerateTriggerReply(string user, string reply)
     {
         if (user.Contains("開心"))
-            reply += "\n想不想出門走走呀？我可以幫你打開地圖～";
+            reply += "\n想不想記下這份開心？可以寫在日記裡唷！或者也可以出去走走～我幫你開地圖。";
         else if (user.Contains("傷心") || user.Contains("難過"))
-            reply += "\n不然寫寫日記，或我們來聊聊也好～";
+            reply += "\n想不想寫下這些心情？我可以幫你打開日記，也可以帶你看看附近有什麼活動。";
         else if (user.Contains("吃") || user.Contains("藥"))
-            reply += "\n對了，別忘了吃飯和吃藥喔～";
+            reply += "\n對了，別忘了吃飯和吃藥喔～要不要記在日記裡提醒自己呢？";
         else if (user.Contains("運動") || user.Contains("散步"))
-            reply += "\n你的步數也會上排行榜，我會幫你記得！";
+            reply += "\n記得看排行榜唷～看自己今天走了幾步，我們一起加油！";
         return reply;
     }
 
