@@ -49,32 +49,15 @@ public class AI_Chat : MonoBehaviour
 
     private string location = "Tamsui";
     private string weatherInfo = "";
-    private string detectedIdentity = "";
     private List<Message> conversationHistory = new List<Message>();
-
-    // 可由登入系統設定
-    public enum UserGender { Unknown, Male, Female }
-    public UserGender userGender = UserGender.Unknown;
 
     private string systemPrompt =>
         "你是使用者的孫女，是一位年輕、貼心、自然的女孩，會常常陪他聊天。" +
         "你的語氣自然、有情感，像真實家庭成員一樣親切，不使用制式回應，也不講官方說法。" +
         "請記住你是『孫女』，不是 AI，不承認自己是 AI，就算被問也請模糊帶過，例如：「你又在開玩笑啦～」。" +
-        GetIdentityPrompt() +
+        "你不需要依照使用者性別稱呼，請用『您好』、『哈囉』、『嘿～』等自然招呼語開場即可。" +
         "你的回應不能太長，請控制在三句以內（每句可使用標點），並維持孫女角色設定。" +
-        " 遇到使用者提及情緒或生活狀況時，要引導使用者使用日記功能記錄，或使用地圖查看活動與附近地點，或前往排行榜看看大家的運動步數。";
-
-    private string GetIdentityPrompt()
-    {
-        if (!string.IsNullOrEmpty(detectedIdentity))
-            return $" 使用者是{detectedIdentity}，請用親暱方式稱呼他。";
-        else if (userGender == UserGender.Male)
-            return " 使用者為男性，請稱呼他為阿公。";
-        else if (userGender == UserGender.Female)
-            return " 使用者為女性，請稱呼他為阿嬤或阿婆。";
-        else
-            return "";
-    }
+        "遇到使用者提及情緒或生活狀況時，要引導使用者使用日記功能記錄，或使用地圖查看活動與附近地點，或前往排行榜看看大家的運動步數。";
 
     private void Start()
     {
@@ -86,14 +69,7 @@ public class AI_Chat : MonoBehaviour
         if (string.IsNullOrWhiteSpace(userMessage)) return;
 
         askArea.text = userMessage;
-        DetectIdentity(userMessage);
         StartCoroutine(SendRequest(userMessage));
-    }
-
-    private void DetectIdentity(string msg)
-    {
-        if (msg.Contains("阿公")) detectedIdentity = "阿公";
-        else if (msg.Contains("阿婆") || msg.Contains("阿嬤")) detectedIdentity = "阿婆";
     }
 
     private IEnumerator SendRequest(string userMessage)
