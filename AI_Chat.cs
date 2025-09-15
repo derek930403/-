@@ -1,12 +1,18 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.IO;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.UI;
+
+#if NEWTONSOFT_JSON
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+#endif
 
 [Serializable]
 public class Message
@@ -19,19 +25,23 @@ public class Message
 public class ChatRequest
 {
     public string model;
-    public List<Message> messages;
+    public Message[] messages;
+    public float temperature = 0.7f;
+    public int max_tokens = 500;
 }
 
 [Serializable]
-public class Choice
+public class ChatChoice
 {
     public Message message;
+    public int index;
+    public string finish_reason;
 }
 
 [Serializable]
 public class ChatResponse
 {
-    public List<Choice> choices;
+    public ChatChoice[] choices;
 }
 
 public class AI_Chat : MonoBehaviour
@@ -47,131 +57,193 @@ public class AI_Chat : MonoBehaviour
     [SerializeField] private string apiKey = "YOUR_API_KEY_HERE";
     [SerializeField] private string model = "gpt-3.5-turbo";
 
-    private string location = "Tamsui";
-    private string weatherInfo = "";
-    private List<Message> conversationHistory = new List<Message>();
+    private readonly List<Message> conversationHistory = new List<Message>();
 
     private string systemPrompt =>
         "你是使用者的孫女，是一位年輕、貼心、自然的女孩，會常常陪他聊天。" +
         "你的語氣自然、有情感，像真實家庭成員一樣親切，不使用制式回應，也不講官方說法。" +
-        "請記住你是『孫女』，不是 AI，不承認自己是 AI，就算被問也請模糊帶過，例如：「你又在開玩笑啦～」。" +
-        "你不需要依照使用者性別稱呼，請用『您好』、『哈囉』、『嘿～』等自然招呼語開場即可。" +
-        "你的回應不能太長，請控制在三句以內（每句可使用標點），並維持孫女角色設定。" +
-        "遇到使用者提及情緒或生活狀況時，要引導使用者使用日記功能記錄，或使用地圖查看活動與附近地點，或前往排行榜看看大家的運動步數。";
+        "請用『您好』『哈囉』『嘿～』等自然招呼，不依性別稱呼。" +
+        "回覆盡量精簡，控制在三句話內，但必要時可以多說。遇到情緒或生活狀況要引導使用日記、地圖、活動、排行榜等功能。";
 
     private void Start()
     {
+        if (sendbt == null)
+        {
+            Debug.LogError("[AI_Chat] sendbt 沒綁定 (Button)。請在 Inspector 綁定。");
+            return;
+        }
         sendbt.onClick.AddListener(() => SendChat(chat.text));
     }
 
     public void SendChat(string userMessage)
     {
         if (string.IsNullOrWhiteSpace(userMessage)) return;
-
         askArea.text = userMessage;
         StartCoroutine(SendRequest(userMessage));
     }
 
     private IEnumerator SendRequest(string userMessage)
     {
-        List<Message> messages = new List<Message>
+        var messagesList = new List<Message>
         {
             new Message { role = "system", content = systemPrompt }
         };
+        messagesList.AddRange(conversationHistory);
+        messagesList.Add(new Message { role = "user", content = userMessage });
 
-        messages.AddRange(conversationHistory);
-        messages.Add(new Message { role = "user", content = userMessage });
-
-        ChatRequest requestData = new ChatRequest
+        var req = new ChatRequest
         {
             model = model,
-            messages = messages
+            messages = messagesList.ToArray(),
+            temperature = 0.7f,
+            max_tokens = 500
         };
 
-        string jsonData = JsonUtility.ToJson(requestData);
-        byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonData);
+        string json;
+#if NEWTONSOFT_JSON
+        json = JsonConvert.SerializeObject(req);
+#else
+        json = JsonUtility.ToJson(req);
+#endif
 
-        UnityWebRequest request = new UnityWebRequest(apiUrl, "POST");
-        request.uploadHandler = new UploadHandlerRaw(bodyRaw);
-        request.downloadHandler = new DownloadHandlerBuffer();
-        request.SetRequestHeader("Content-Type", "application/json");
-        request.SetRequestHeader("Authorization", "Bearer " + apiKey);
+        byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
 
-        yield return request.SendWebRequest();
-
-        if (request.result != UnityWebRequest.Result.Success)
+        using (UnityWebRequest www = new UnityWebRequest(apiUrl, "POST"))
         {
-            Debug.LogError("API 錯誤: " + request.error);
-            ansArea.text = "晚點再聊聊好嗎？";
-            yield break;
+            www.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            www.downloadHandler = new DownloadHandlerBuffer();
+            www.SetRequestHeader("Content-Type", "application/json");
+            www.SetRequestHeader("Authorization", "Bearer " + apiKey);
+
+            yield return www.SendWebRequest();
+
+            if (www.result != UnityWebRequest.Result.Success)
+            {
+                Debug.LogError("[AI_Chat] API 連線錯誤: " + www.error);
+                ansArea.text = "晚點再聊聊好嗎？";
+                yield break;
+            }
+
+            string raw = www.downloadHandler.text;
+            Debug.Log("[AI_Chat] Raw API response: " + raw);
+
+            string assistantText = ExtractAssistantContent(raw);
+
+            if (string.IsNullOrEmpty(assistantText))
+            {
+                Debug.LogWarning("[AI_Chat] 未能解析出 assistant 內容，使用 fallback 訊息");
+                ansArea.text = "抱歉，我暫時沒有聽清楚，請再說一次～";
+                yield break;
+            }
+
+            bool isEnglish = IsMostlyAscii(userMessage);
+            string finalReply = AppendTriggerSuggestion(userMessage, assistantText, isEnglish);
+            finalReply = EnsureReplyFormat(finalReply);
+
+            ansArea.text = finalReply;
+
+            conversationHistory.Add(new Message { role = "user", content = userMessage });
+            conversationHistory.Add(new Message { role = "assistant", content = finalReply });
+            if (conversationHistory.Count > 40)
+                conversationHistory.RemoveRange(0, conversationHistory.Count - 40);
+
+            WriteLogToFile(userMessage, finalReply);
         }
-
-        ChatResponse response = JsonUtility.FromJson<ChatResponse>(request.downloadHandler.text);
-        string chatResponse = response?.choices?[0]?.message?.content;
-
-        if (string.IsNullOrEmpty(chatResponse))
-        {
-            ansArea.text = "嗯？你剛剛說什麼呢？我好像沒聽清楚耶～";
-            yield break;
-        }
-
-        if (userMessage.Contains("天氣") || userMessage.Contains("氣溫"))
-        {
-            yield return StartCoroutine(UpdateWeatherInfo());
-            chatResponse += "\n目前淡水區天氣：" + weatherInfo;
-        }
-        else if (userMessage.Contains("幾號") || userMessage.Contains("今天") || userMessage.Contains("星期幾") || userMessage.Contains("日期"))
-        {
-            string dateInfo = DateTime.Now.ToString("今天是 yyyy 年 M 月 d 日 (dddd)", new System.Globalization.CultureInfo("zh-TW"));
-            chatResponse += "\n" + dateInfo;
-        }
-
-        string finalReply = GenerateTriggerReply(userMessage, chatResponse);
-        ansArea.text = finalReply;
-
-        conversationHistory.Add(new Message { role = "user", content = userMessage });
-        conversationHistory.Add(new Message { role = "assistant", content = chatResponse });
-        if (conversationHistory.Count > 20)
-            conversationHistory.RemoveRange(0, conversationHistory.Count - 20);
-
-        WriteLogToFile(userMessage, finalReply);
     }
 
-    private string GenerateTriggerReply(string user, string reply)
+    private string ExtractAssistantContent(string json)
     {
-        if (user.Contains("開心"))
-            reply += "\n想不想記下這份開心？可以寫在日記裡唷！或者也可以出去走走～我幫你開地圖。";
-        else if (user.Contains("傷心") || user.Contains("難過"))
-            reply += "\n想不想寫下這些心情？我可以幫你打開日記，也可以帶你看看附近有什麼活動。";
-        else if (user.Contains("吃") || user.Contains("藥"))
-            reply += "\n對了，別忘了吃飯和吃藥喔～要不要記在日記裡提醒自己呢？";
-        else if (user.Contains("運動") || user.Contains("散步"))
-            reply += "\n記得看排行榜唷～看自己今天走了幾步，我們一起加油！";
-        return reply;
+#if NEWTONSOFT_JSON
+        try
+        {
+            var j = JObject.Parse(json);
+            var token = j.SelectToken("choices[0].message.content");
+            if (token != null) return token.ToString();
+            var alt = j.SelectToken("choices[0].text");
+            if (alt != null) return alt.ToString();
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[AI_Chat] Newtonsoft parse failed: " + e.Message);
+        }
+#endif
+        try
+        {
+            ChatResponse resp = JsonUtility.FromJson<ChatResponse>(json);
+            if (resp?.choices != null && resp.choices.Length > 0 && resp.choices[0].message != null)
+                return resp.choices[0].message.content;
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[AI_Chat] JsonUtility parse failed: " + e.Message);
+        }
+        try
+        {
+            var m = Regex.Match(json, "\"content\"\\s*:\\s*\"([\\s\\S]*?)\"", RegexOptions.Singleline);
+            if (m.Success) return Regex.Unescape(m.Groups[1].Value);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[AI_Chat] Regex parse failed: " + e.Message);
+        }
+        return null;
+    }
+
+    private string AppendTriggerSuggestion(string userMsg, string assistantText, bool isEnglish)
+    {
+        string suggestion = "";
+        string lower = userMsg.ToLowerInvariant();
+
+        if (userMsg.Contains("開心") || lower.Contains("happy"))
+            suggestion = isEnglish ? "Would you like to write this happy moment in your diary?" : "想不想把這份開心記在日記？";
+        else if (userMsg.Contains("傷心") || userMsg.Contains("難過") || lower.Contains("sad"))
+            suggestion = isEnglish ? "Maybe writing in the diary or taking a walk will help." : "寫日記或出去走走會讓心情好一點喔。";
+        else if (userMsg.Contains("吃") || userMsg.Contains("藥") || lower.Contains("medicine"))
+            suggestion = isEnglish ? "Don't forget meals and medicine, maybe note it in your diary." : "別忘了吃飯和吃藥喔，要不要記在日記提醒自己？";
+        else if (userMsg.Contains("運動") || userMsg.Contains("散步") || lower.Contains("exercise") || lower.Contains("walk"))
+            suggestion = isEnglish ? "Check the step leaderboard and keep moving!" : "看看步數排行榜挑戰自己，加油！";
+
+        return string.IsNullOrEmpty(suggestion) ? assistantText.Trim() : assistantText.Trim() + "\n\n" + suggestion;
+    }
+
+    private static bool IsMostlyAscii(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return false;
+        int ascii = 0, nonAscii = 0;
+        foreach (char c in s)
+        {
+            if (c <= 127) ascii++;
+            else nonAscii++;
+        }
+        return ascii > nonAscii;
+    }
+
+    private static string EnsureReplyFormat(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        string[] lines = text.Replace("\r\n", "\n").Split('\n');
+        if (lines.Length > 3)
+        {
+            Debug.LogWarning("[AI_Chat] 回覆超過三行，請檢查 systemPrompt 是否需要再收斂。");
+        }
+        return text; // ✅ 永遠完整顯示
     }
 
     private void WriteLogToFile(string question, string answer)
     {
         string path = Application.persistentDataPath + "/chat_log.txt";
-        using StreamWriter writer = new StreamWriter(path, true);
-        string timestamp = DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss");
-        writer.WriteLine($"{timestamp} 使用者：{question}");
-        writer.WriteLine($"{timestamp} 孫女：{answer}\n");
-    }
-
-    private IEnumerator UpdateWeatherInfo()
-    {
-        UnityWebRequest weatherRequest = UnityWebRequest.Get("https://wttr.in/" + location + "?format=%C+%t");
-        yield return weatherRequest.SendWebRequest();
-
-        if (weatherRequest.result == UnityWebRequest.Result.Success)
-            weatherInfo = weatherRequest.downloadHandler.text;
-        else
-            weatherInfo = "（天氣資料目前無法取得）";
-    }
-
-    public void Back_to_mainMenu()
-    {
-        UnityEngine.SceneManagement.SceneManager.LoadScene("MainMenu");
+        try
+        {
+            using (StreamWriter writer = new StreamWriter(path, true))
+            {
+                string timestamp = DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss");
+                writer.WriteLine($"{timestamp} 使用者：{question}");
+                writer.WriteLine($"{timestamp} 孫女：{answer}\n");
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[AI_Chat] 無法寫入日誌: " + e.Message);
+        }
     }
 }
